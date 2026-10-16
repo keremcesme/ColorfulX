@@ -178,6 +178,14 @@ open class AnimatedMulticolorGradientView: MulticolorGradientView {
         return didRender
     }
 
+    @discardableResult
+    override public func renderNow() -> Bool {
+        updateRenderParameters(deltaTime: 0)
+        let didRender = super.renderNow()
+        if didRender { lastRenderExecution = obtainCurrentTimestamp() }
+        return didRender
+    }
+
     override func hasPendingWork() -> Bool {
         speed > 0 || !isColorTransitionCompleted() || renderInputWasModified || needsRender
     }

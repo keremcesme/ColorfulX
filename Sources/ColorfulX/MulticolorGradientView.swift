@@ -75,15 +75,37 @@ open class MulticolorGradientView: MetalView {
         if render() { needsRender = false }
     }
 
+    /// Draws the current parameters and presents the frame with the surrounding Core Animation
+    /// transaction, so it appears in the same commit as any layer change made alongside this call.
+    /// Waits for a frame still in flight; the display link keeps presenting asynchronously.
+    @discardableResult
+    public func renderNow() -> Bool {
+        guard metalLink != nil, computePipelineState != nil else {
+            needsRender = false
+            return false
+        }
+        let didRender = render(presentsWithTransaction: true)
+        if didRender { needsRender = false }
+        return didRender
+    }
+
     /// Encodes and commits one frame. Returns false when nothing was drawn.
     @discardableResult
     func render() -> Bool {
+        render(presentsWithTransaction: false)
+    }
+
+    /// A synchronous frame blocks until the previous one finishes, then presents once it is
+    /// scheduled; an asynchronous frame is skipped while another is in flight.
+    func render(presentsWithTransaction: Bool) -> Bool {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         CATransaction.setAnimationDuration(0)
 
         let frameInFlight = frameInFlight
-        guard frameInFlight.wait(timeout: .now()) == .success else {
+        if presentsWithTransaction {
+            frameInFlight.wait()
+        } else if frameInFlight.wait(timeout: .now()) != .success {
             CATransaction.commit()
             return false
         }
@@ -152,18 +174,27 @@ open class MulticolorGradientView: MetalView {
         commandEncoder.setBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 0)
         commandEncoder.setTexture(drawable.texture, index: 4)
 
-        let threadGroupCount = MTLSizeMake(1, 1, 1)
-        let threadGroups = MTLSizeMake(
-            drawable.texture.width / threadGroupCount.width,
-            drawable.texture.height / threadGroupCount.height,
-            1,
-        )
+        // Non-uniform threadgroups sized from the pipeline; no thread falls outside the texture.
+        let threadWidth = computePipelineState.threadExecutionWidth
+        let threadHeight = max(1, computePipelineState.maxTotalThreadsPerThreadgroup / threadWidth)
+        let gridSize = MTLSizeMake(drawable.texture.width, drawable.texture.height, 1)
 
-        commandEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupCount)
+        commandEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: MTLSizeMake(threadWidth, threadHeight, 1))
         commandEncoder.endEncoding()
 
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
+        if presentsWithTransaction {
+            let layer = metalLink.metalLayer
+            layer.presentsWithTransaction = true
+            commandBuffer.commit()
+            commandBuffer.waitUntilScheduled()
+            drawable.present()
+            // The flag stays set because nothing presents while idle; the next asynchronous frame clears it.
+        } else {
+            let layer = metalLink.metalLayer
+            if layer.presentsWithTransaction { layer.presentsWithTransaction = false }
+            commandBuffer.present(drawable)
+            commandBuffer.commit()
+        }
 
         CATransaction.commit()
         return true
