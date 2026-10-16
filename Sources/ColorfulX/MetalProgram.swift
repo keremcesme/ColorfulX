@@ -125,6 +125,30 @@ private enum MetalProgram: String {
         return rgb;
     }
 
+    // Integer hash used to decorrelate the dither noise per pixel and channel.
+    uint hash_u32(uint x)
+    {
+        x ^= x >> 16;
+        x *= 0x7feb352dU;
+        x ^= x >> 15;
+        x *= 0x846ca68bU;
+        x ^= x >> 16;
+        return x;
+    }
+
+    float hash_unit(uint2 p, uint salt)
+    {
+        return float(hash_u32(p.x * 1973U + p.y * 9277U + salt * 26699U)) * (1.0f / 4294967296.0f);
+    }
+
+    // Triangular-PDF noise of +-1 step of an 8-bit channel, hides banding in smooth gradients.
+    float3 tpdf_dither(uint2 p)
+    {
+        float3 a = float3(hash_unit(p, 0U), hash_unit(p, 1U), hash_unit(p, 2U));
+        float3 b = float3(hash_unit(p, 3U), hash_unit(p, 4U), hash_unit(p, 5U));
+        return (a + b - 1.0f) / 255.0f;
+    }
+
     kernel void blend_colors(texture2d<float, access::write> output [[texture(4)]],
                              constant Uniforms &uniforms [[buffer(0)]],
                              uint2 gid [[thread_position_in_grid]])
@@ -158,6 +182,7 @@ private enum MetalProgram: String {
         float alpha = clamp(col.w, 0.0, 1.0);
         float3 color_with_out_alpha = float3_lab_to_rgb(col.xyz);
         float3 premultiplied = color_with_out_alpha * alpha;
+        premultiplied += tpdf_dither(gid) * alpha;
         float4 color = float4(premultiplied, alpha);
 
         output.write(clamp(color, 0.0, 1.0), gid);
