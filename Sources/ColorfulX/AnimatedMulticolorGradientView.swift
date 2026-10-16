@@ -25,7 +25,10 @@ open class AnimatedMulticolorGradientView: MulticolorGradientView {
     public private(set) var lastRenderParametersUpdate: Double = 0
     public private(set) var lastRenderExecution: Double = 0
     public var renderInputWasModified: Bool = false {
-        didSet { lastRenderParametersUpdate = obtainCurrentTimestamp() }
+        didSet {
+            lastRenderParametersUpdate = obtainCurrentTimestamp()
+            if renderInputWasModified { refreshDisplayLinkPause() }
+        }
     }
 
     public private(set) var speckles: [Speckle] {
@@ -168,13 +171,23 @@ open class AnimatedMulticolorGradientView: MulticolorGradientView {
         }
     #endif
 
-    override func render() {
-        super.render()
-        lastRenderExecution = obtainCurrentTimestamp()
+    @discardableResult
+    override func render() -> Bool {
+        let didRender = super.render()
+        if didRender { lastRenderExecution = obtainCurrentTimestamp() }
+        return didRender
+    }
+
+    override func hasPendingWork() -> Bool {
+        speed > 0 || !isColorTransitionCompleted() || renderInputWasModified || needsRender
     }
 
     override func vsync() {
-        guard shouldRenderNextFrameWithinSynchornization() else { return }
+        guard shouldRenderNextFrameWithinSynchornization() else {
+            // A pending redraw of unchanged parameters needs no parameter update.
+            if needsRender, frameLimiterShouldScheduleNextFrame() { renderIfNeeded() }
+            return
+        }
         updateRenderParameters(deltaTime: deltaTimeForRenderParametersUpdate())
         super.vsync()
     }

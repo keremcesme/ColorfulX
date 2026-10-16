@@ -39,6 +39,11 @@ import Foundation
 
         func vsync() {}
 
+        // The display link keeps running on AppKit; these hooks do nothing there.
+        func hasPendingWork() -> Bool { true }
+        func viewNeedsFreshFrame() {}
+        func refreshDisplayLinkPause() {}
+
         private func updateQualificationCheck() {
             qualifiedForUpdate = [
                 window != nil,

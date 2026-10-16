@@ -68,19 +68,22 @@ class MetalLink: DisplayLinkDelegate {
         }
     }
 
-    func updateDrawableSize(withBounds bounds: CGRect) {
+    /// Returns whether the layer's frame, and so its drawable size, changed.
+    @discardableResult
+    func updateDrawableSize(withBounds bounds: CGRect) -> Bool {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         CATransaction.setAnimationDuration(0)
 
         guard metalLayer.frame != bounds else {
             CATransaction.commit()
-            return
+            return false
         }
 
         metalLayer.frame = bounds
         updateDrawableSizeFromFrame()
         CATransaction.commit()
+        return true
     }
 
     func updateDrawableSizeFromFrame() {

@@ -17,7 +17,12 @@ open class MulticolorGradientView: MetalView {
         }
     }
 
-    private var needsRender: Bool = false
+    var needsRender: Bool = false {
+        didSet {
+            if needsRender { refreshDisplayLinkPause() }
+        }
+    }
+
     private var computePipelineState: MTLComputePipelineState?
     /// Lets one frame be in flight at a time. Taken on the main thread and
     /// returned from Metal's completion thread, which an NSLock does not allow.
@@ -25,7 +30,11 @@ open class MulticolorGradientView: MetalView {
 
     public var renderScale: Double {
         get { metalLink?.scaleFactor ?? 1 }
-        set { metalLink?.scaleFactor = newValue }
+        set {
+            guard let metalLink, metalLink.scaleFactor != newValue else { return }
+            metalLink.scaleFactor = newValue
+            needsRender = true
+        }
     }
 
     override public init() {
@@ -47,13 +56,28 @@ open class MulticolorGradientView: MetalView {
         renderIfNeeded()
     }
 
-    func renderIfNeeded() {
-        guard needsRender else { return }
-        defer { needsRender = false }
-        render()
+    override func hasPendingWork() -> Bool {
+        needsRender
     }
 
-    func render() {
+    override func viewNeedsFreshFrame() {
+        needsRender = true
+    }
+
+    func renderIfNeeded() {
+        guard needsRender else { return }
+        // Without a Metal link or pipeline state no frame can ever be drawn, so drop the request.
+        guard metalLink != nil, computePipelineState != nil else {
+            needsRender = false
+            return
+        }
+        // A frame that could not be encoded leaves the request set for the next tick.
+        if render() { needsRender = false }
+    }
+
+    /// Encodes and commits one frame. Returns false when nothing was drawn.
+    @discardableResult
+    func render() -> Bool {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         CATransaction.setAnimationDuration(0)
@@ -61,18 +85,20 @@ open class MulticolorGradientView: MetalView {
         let frameInFlight = frameInFlight
         guard frameInFlight.wait(timeout: .now()) == .success else {
             CATransaction.commit()
-            return
+            return false
         }
 
         guard let metalLink,
               let computePipelineState,
+              metalLink.metalLayer.drawableSize.width >= 1,
+              metalLink.metalLayer.drawableSize.height >= 1,
               let drawable = metalLink.metalLayer.nextDrawable(),
               let commandBuffer = metalLink.commandQueue.makeCommandBuffer(),
               let commandEncoder = commandBuffer.makeComputeCommandEncoder()
         else {
             frameInFlight.signal()
             CATransaction.commit()
-            return
+            return false
         }
         commandBuffer.addCompletedHandler { _ in
             frameInFlight.signal()
@@ -140,5 +166,6 @@ open class MulticolorGradientView: MetalView {
         commandBuffer.commit()
 
         CATransaction.commit()
+        return true
     }
 }

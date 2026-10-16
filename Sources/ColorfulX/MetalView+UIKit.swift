@@ -10,7 +10,7 @@
 
     open class UIMetalView: UIView {
         var metalLink: MetalLink? = try? .init()
-        var qualifiedForUpdate: Bool = true
+        var qualifiedForUpdate: Bool = false
 
         init() {
             super.init(frame: .zero)
@@ -44,13 +44,35 @@
         deinit { metalLink = nil }
 
         private func updateQualificationCheck() {
-            qualifiedForUpdate = [
+            let qualified = [
                 window != nil,
                 frame.width > 0,
                 frame.height > 0,
                 alpha > 0,
                 !isHidden,
             ].allSatisfy(\.self)
+            let becameQualified = qualified && !qualifiedForUpdate
+            qualifiedForUpdate = qualified
+            // Nothing was drawn while the view did not qualify, so draw once on return.
+            if becameQualified { viewNeedsFreshFrame() }
+            refreshDisplayLinkPause()
+        }
+
+        /// Whether the view still has something to draw on a coming frame.
+        /// While it does not, the display link is paused.
+        func hasPendingWork() -> Bool { false }
+
+        /// Asks the view to draw its current state on the next frame.
+        func viewNeedsFreshFrame() {}
+
+        /// Runs the display link only while the view qualifies and has work,
+        /// and writes `isPaused` only on a change because each write rebinds the link.
+        func refreshDisplayLinkPause() {
+            guard let displayLink = metalLink?.displayLink else { return }
+            let shouldPause = !(qualifiedForUpdate && hasPendingWork())
+            if displayLink.isPaused != shouldPause {
+                displayLink.isPaused = shouldPause
+            }
         }
 
         override open var frame: CGRect {
@@ -114,8 +136,12 @@
         }
 
         private func vsyncCheckQualificationAndSend() {
-            guard qualifiedForUpdate else { return }
+            guard qualifiedForUpdate else {
+                refreshDisplayLinkPause()
+                return
+            }
             vsync()
+            refreshDisplayLinkPause()
         }
 
         func vsync() {}
@@ -126,7 +152,9 @@
 
             super.layoutSubviews()
             updateQualificationCheck()
-            metalLink?.updateDrawableSize(withBounds: bounds)
+            if metalLink?.updateDrawableSize(withBounds: bounds) == true {
+                viewNeedsFreshFrame()
+            }
 
             CATransaction.commit()
         }
